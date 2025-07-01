@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ATC Voice Command Demo</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; }
+  #canvas { border: 1px solid #444; background: #e0f7fa; }
+  #log { margin-top: 10px; }
+  button { font-size: 16px; padding: 10px; }
+</style>
+</head>
+<body>
+
+<h2>ATC Voice Command Demo</h2>
+<button id="startBtn">Start Speaking</button>
+<div id="recognizedText"></div>
+<div id="parsedCommand"></div>
+
+<canvas id="canvas" width="600" height="400"></canvas>
+
+<script>
+  const startBtn = document.getElementById('startBtn');
+  const recognizedText = document.getElementById('recognizedText');
+  const parsedCommand = document.getElementById('parsedCommand');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Simple taxiway and runway positions (x,y)
+  const taxiways = {
+    Bravo: { x: 100, y: 200 },
+    Charlie: { x: 300, y: 200 },
+    Alpha: { x: 500, y: 200 },
+  };
+  const runways = {
+    '07L': { x: 550, y: 50 },
+    '07C': { x: 550, y: 100 },
+    '07R': { x: 550, y: 150 },
+  };
+
+  // Aircraft state
+  let aircraft = {
+    x: 50,
+    y: 200,
+    targetPath: [],
+    speed: 2,
+  };
+
+  // Draw airport layout
+  function drawAirport() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw taxiways
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 8;
+    // Draw taxiway line Alpha -> Charlie -> Bravo
+    ctx.beginPath();
+    ctx.moveTo(taxiways.Alpha.x, taxiways.Alpha.y);
+    ctx.lineTo(taxiways.Charlie.x, taxiways.Charlie.y);
+    ctx.lineTo(taxiways.Bravo.x, taxiways.Bravo.y);
+    ctx.lineTo(aircraft.x - 20, taxiways.Bravo.y); // path towards aircraft start
+    ctx.stroke();
+
+    // Draw runways
+    ctx.fillStyle = '#666';
+    Object.entries(runways).forEach(([name, pos]) => {
+      ctx.fillRect(pos.x - 20, pos.y - 10, 40, 20);
+      ctx.fillStyle = 'white';
+      ctx.font = '12px Arial';
+      ctx.fillText(name, pos.x - 15, pos.y + 5);
+      ctx.fillStyle = '#666';
+    });
+
+    // Draw aircraft
+    ctx.fillStyle = 'red';
+    ctx.beginPath();
+    ctx.arc(aircraft.x, aircraft.y, 8, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+
+  // Move aircraft along targetPath (array of points)
+  function moveAircraft() {
+    if (aircraft.targetPath.length === 0) return;
+
+    const target = aircraft.targetPath[0];
+    const dx = target.x - aircraft.x;
+    const dy = target.y - aircraft.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < aircraft.speed) {
+      // reached this point
+      aircraft.x = target.x;
+      aircraft.y = target.y;
+      aircraft.targetPath.shift(); // remove reached waypoint
+    } else {
+      aircraft.x += (dx / dist) * aircraft.speed;
+      aircraft.y += (dy / dist) * aircraft.speed;
+    }
+  }
+
+  // Main animation loop
+  function loop() {
+    moveAircraft();
+    drawAirport();
+    requestAnimationFrame(loop);
+  }
+  loop();
+
+  // Voice recognition setup
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert('Your browser does not support Speech Recognition API');
+  }
+  const recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (event) => {
+    const speech = event.results[0][0].transcript;
+    recognizedText.textContent = `You said: "${speech}"`;
+    const parsed = parseATCCommand(speech);
+    parsedCommand.textContent = `Parsed command: ${JSON.stringify(parsed)}`;
+    executeCommand(parsed);
+  };
+
+  recognition.onerror = (event) => {
+    recognizedText.textContent = 'Error occurred in recognition: ' + event.error;
+  };
+
+  startBtn.onclick = () => {
+    recognition.start();
+  };
+
+  // Simple parser for clearances and taxi commands
+  function parseATCCommand(text) {
+    text = text.toLowerCase();
+
+    let clearanceMatch = text.match(/cleared to (\w+) via (\w+ \d+)/);
+    let taxiMatch = text.match(/taxi to runway (\d+\w?) via (\w+)/);
+
+    if (clearanceMatch) {
+      return {
+        type: 'clearance',
+        destination: clearanceMatch[1],
+        procedure: clearanceMatch[2],
+      };
+    }
+    if (taxiMatch) {
+      return {
+        type: 'taxi',
+        runway: taxiMatch[1].toUpperCase(),
+        taxiway: capitalize(taxiMatch[2]),
+      };
+    }
+    return { type: 'unknown', raw: text };
+  }
+
+  // Helper to capitalize first letter
+  function capitalize(s) {
+    if (!s) return s;
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  // Execute parsed command
+  function executeCommand(cmd) {
+    if (cmd.type === 'taxi') {
+      const taxiwayPoint = taxiways[cmd.taxiway];
+      const runwayPoint = runways[cmd.runway];
+      if (taxiwayPoint && runwayPoint) {
+        // Path: current aircraft position -> taxiway -> runway
+        aircraft.targetPath = [
+          { x: taxiwayPoint.x, y: taxiwayPoint.y },
+          { x: runwayPoint.x, y: runwayPoint.y },
+        ];
+      } else {
+        parsedCommand.textContent = 'Unknown taxiway or runway';
+      }
+    } else if (cmd.type === 'clearance') {
+      // For demo, just show message
+      parsedCommand.textContent += ' (Clearance accepted, but no movement simulated)';
+    } else {
+      parsedCommand.textContent = 'Command not recognized. Try "Taxi to runway 07L via Bravo" or "Cleared to Rockford via Alpha 3".';
+    }
+  }
+</script>
+
+</body>
+</html>
